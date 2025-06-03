@@ -1,133 +1,110 @@
-from flask import Flask, redirect, session, request, render_template, url_for, flash
-import pymysql
-from db import create_db
+from flask import Flask, render_template, request, redirect, url_for, flash, session
+import mysql.connector
 import os
 from werkzeug.utils import secure_filename
+from datetime import date
 
 app = Flask(__name__)
-app.secret_key = 'hayst08'
+app.secret_key = 'desangieee'
 
-# Upload folder for profile images
+# MySQL configuration
+db = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="",
+    database="week"
+)
+
 UPLOAD_FOLDER = 'static/uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-
-create_db()  # Ensure the database and table are created
-
-# MySQL Configuration   
-DB_HOST = 'localhost'
-DB_USER = 'root'
-DB_PASSWORD = ''
-DB_NAME = 'weekone_db'
-cred = {
-    'host': DB_HOST,
-    'user': DB_USER,
-    'pw': DB_PASSWORD,
-    'db_name': DB_NAME
-}
-
-def connection():
-    try:
-        conn = pymysql.connect(
-            host=cred['host'],
-            user=cred['user'],
-            password=cred['pw'],
-            db=cred['db_name']
-        )
-        return conn
-    except pymysql.Error as e:
-        print(f"Error connecting to MySQL: {e}")
-        return None
-
-# Allowed file extensions for images
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
-    if 'logged' in session:
-        return redirect(url_for('profile'))
-
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-
-        conn = connection()
-        if conn is not None:
-            with conn.cursor() as cur:
-                # Check if the username exists in the database
-                cur.execute("SELECT id, username FROM users WHERE username=%s", (username,))
-                user = cur.fetchone()
-
-                if not user:
-                    flash('Username is not associated with any account. Please register.')
-                    return render_template('login.html')
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM user WHERE username=%s AND password=%s", (username, password))
+        user = cursor.fetchone()
+        cursor.close()
+        if user:
+            session['username'] = username
+            return redirect(url_for('profile', username=username))  # Redirect to profile page
         else:
-            flash("Database connection failed. Please try again later.")
-            return render_template('login.html')
+            flash('Invalid username or password', 'danger')
     return render_template('login.html')
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
+@app.route('/dashboard')
+def dashboard():
+    if 'username' in session:
+        return f"Welcome, {session['username']}! <a href='{url_for('logout')}'>Logout</a>"
+    return redirect(url_for('login'))
+
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('login'))
+
+# Add a register route for the register link
+@app.route('/register', methods=['GET', 'POST'])
+def register():
     if request.method == 'POST':
-        # Match the names from your form
         name = request.form['name']
-        bday = request.form['birthday']  # Changed from 'bday'
         address = request.form['address']
+        birthday = request.form['birthday']
         username = request.form['username']
         password = request.form['password']
-        image = request.files['image']  # Changed from 'image'
+        image_file = request.files['image']
 
-        if image and allowed_file(image.filename):
-            filename = secure_filename(image.filename)
-            filename = f"{username}_{filename}"
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            image.save(file_path)
-            image_path = f'uploads/{filename}'
+        if image_file and allowed_file(image_file.filename):
+            filename = secure_filename(image_file.filename)
+            image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            image_file.save(image_path)
         else:
-            flash('Invalid image file. Allowed types: PNG, JPG, JPEG, GIF')
-            return redirect(url_for('signup'))
+            flash('Invalid image file.', 'danger')
+            return render_template('register.html')
 
-        conn = connection()
-        if conn is None:
-            flash("Database connection failed. Please try again later.", "error")
-            return redirect(url_for("signup"))
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM user WHERE username=%s", (username,))
+        existing_user = cursor.fetchone()
+        if existing_user:
+            flash('Username already exists', 'danger')
+        else:
+            cursor.execute(
+                "INSERT INTO user (name, address, image, birthday, username, password) VALUES (%s, %s, %s, %s, %s, %s)",
+                (name, address, filename, birthday, username, password)
+            )
+            db.commit()
+            flash('Registration successful! Please log in.', 'success')
+            cursor.close()
+            return redirect(url_for('login'))
+        cursor.close()
+    return render_template('register.html')
 
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT * FROM users WHERE username = %s", [username])
-                account = cur.fetchone()
-                if account:
-                    flash("Username is already registered!")
-                    return redirect(url_for("signup"))
-                else:
-                    cur.execute(
-                        "INSERT INTO users (name, birthday, address, username, password) VALUES (%s, %s, %s, %s, %s)",
-                        (name, bday, address, username, password)
-                    )
-                    conn.commit()
-                    flash("Account created successfully!")
-                    return redirect(url_for("login"))
-        except pymysql.Error as e:
-            flash(f"Database error: {e}")
-            return redirect(url_for("signup"))
-        finally:
-            conn.close()
-    return render_template('signup.html')
+@app.route('/profile/<username>')
+def profile(username):
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT name, address, image, birthday FROM user WHERE username=%s", (username,))
+    user = cursor.fetchone()
+    cursor.close()
+    if not user:
+        flash('User not found.', 'danger')
+        return redirect(url_for('dashboard'))
 
+    # Calculate age from birthday
+    if user['birthday']:
+        today = date.today()
+        bday = user['birthday']
+        age = today.year - bday.year - ((today.month, today.day) < (bday.month, bday.day))
+    else:
+        age = 'N/A'
 
-@app.route('/profile')
-def profile():
-    info = {
-        'name': 'Daisy Lou Montante',
-        'age': 21,
-        'address': 'Kauswagan, Cabadbaran City',
-    }
-    return render_template('dashboard.html', information=info)
+    return render_template('profile.html', name=user['name'], address=user['address'], age=age, image=user['image'])
 
-# Run the application
 if __name__ == '__main__':
     app.run(debug=True)
