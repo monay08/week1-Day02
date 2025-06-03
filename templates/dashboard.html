@@ -1,0 +1,19 @@
+<link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+
+    <!-- Main Content -->
+    <section class="student-info">
+            <div class="profile-header" style="position: fixed; padding-right: 20%;">
+                <img src="static/img/monay.jpg" alt="Student Photo" class="profile-photo">
+                <div class="student-name-id">
+                    <h2 class="student-name">{{ student.name }}</h2>
+                    <p class="student-id">Student ID: {{ student.student_id }}</p>
+                </div>
+            </div>
+        
+                <div class="details-section">
+                    <p><strong>{{ student.name }}</strong></p>
+                    <p><strong>{{ student.age }}</strong></p>
+                    <p><strong>{{ student.address }}</strong></p>
+                </div>
+    </section>
